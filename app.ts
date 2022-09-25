@@ -1,4 +1,5 @@
 import SpeculosTransport from '@ledgerhq/hw-transport-node-speculos-http'
+import Aptos from './src/Aptos'
 
 async function exampleSimple () {
   const transport = await SpeculosTransport.open({ baseURL: 'http://localhost:5000' })
@@ -7,9 +8,18 @@ async function exampleSimple () {
   await transport.close()
 }
 
+async function exampleAptos () {
+  const transport = await SpeculosTransport.open({ baseURL: 'http://localhost:5000' })
+  const aptosClinet = new Aptos(transport)
+  const res = await aptosClinet.getAppConfiguration()
+  console.log(res)
+  await transport.close()
+}
+
 const main = async (): Promise<void> => {
   try {
     await exampleSimple()
+    await exampleAptos()
   } catch (err) {
     console.log(err)
   }
