@@ -1,27 +1,26 @@
+import Transport from '@ledgerhq/hw-transport'
 import SpeculosTransport from '@ledgerhq/hw-transport-node-speculos-http'
 import Aptos from './src/Aptos'
 
-async function exampleSimple () {
-  const transport = await SpeculosTransport.open({ baseURL: 'http://localhost:5000' })
-  const res = await transport.send(0xe0, 0x03, 0x00, 0x00)
-  console.log(res)
-  await transport.close()
+async function exampleRaw (transport: Transport) {
+  console.log('getVersion(raw)', await transport.send(0xe0, 0x03, 0x00, 0x00))
 }
 
-async function exampleAptos () {
-  const transport = await SpeculosTransport.open({ baseURL: 'http://localhost:5000' })
+async function exampleAptos (transport: Transport) {
   const aptosClinet = new Aptos(transport)
-  const res = await aptosClinet.getAppConfiguration()
-  console.log(res)
-  await transport.close()
+  console.log('getVersion', await aptosClinet.getVersion())
+  console.log('getAddress', await aptosClinet.getAddress("m/44'/637'/1'/0'/0'", false))
 }
 
 const main = async (): Promise<void> => {
+  const transport = await SpeculosTransport.open({ baseURL: 'http://localhost:5000' })
   try {
-    await exampleSimple()
-    await exampleAptos()
+    await exampleRaw(transport)
+    await exampleAptos(transport)
   } catch (err) {
     console.log(err)
+  } finally {
+    await transport.close()
   }
 }
 
