@@ -3,16 +3,18 @@ import { sha3_256 as sha3Hash } from '@noble/hashes/sha3'
 import Transport from '@ledgerhq/hw-transport'
 import { StatusCodes } from '@ledgerhq/errors'
 
-const MAX_PAYLOAD = 255
+const MAX_APDU_LEN = 255
 const P1_NON_CONFIRM = 0x00
 const P1_CONFIRM = 0x01
-const P2_EXTEND = 0x01
-const P2_MORE = 0x02
+const P1_START = 0x00
+const P2_MORE = 0x80
+const P2_LAST = 0x00
 
-const LEDGER_CLA = 0xe0
+const LEDGER_CLA = 0x5b
 const INS = {
   GET_VERSION: 0x03,
   GET_PUBLIC_KEY: 0x05,
+  SIGN_TX: 0x06,
 }
 
 interface AppConfig {
@@ -34,7 +36,7 @@ export default class Aptos {
   }
 
   async getVersion (): Promise<AppConfig> {
-    const [major, minor, patch] = await this.sendToDevice(INS.GET_VERSION, P1_NON_CONFIRM, Buffer.alloc(0))
+    const [major, minor, patch] = await this.sendToDevice(INS.GET_VERSION, P1_NON_CONFIRM, P2_LAST, Buffer.alloc(0))
     return {
       version: `${major}.${minor}.${patch}`,
     }
@@ -42,13 +44,13 @@ export default class Aptos {
 
   async getAddress (path: string, display: boolean = false): Promise<AddressData> {
     const pathBuffer = this.pathToBuffer(path)
-    const responseBuffer = await this.sendToDevice(INS.GET_PUBLIC_KEY, display ? P1_CONFIRM : P1_NON_CONFIRM, pathBuffer)
+    const responseBuffer = await this.sendToDevice(INS.GET_PUBLIC_KEY, display ? P1_CONFIRM : P1_NON_CONFIRM, P2_LAST, pathBuffer)
 
     let offset = 1
-    const pubKeyLen = responseBuffer.slice(0, offset)[0] - 1
-    const pubKeyBuffer = responseBuffer.slice(++offset, (offset += pubKeyLen))
-    const chainCodeLen = responseBuffer.slice(offset, ++offset)[0]
-    const chainCodeBuffer = responseBuffer.slice(offset, offset + chainCodeLen)
+    const pubKeyLen = responseBuffer.subarray(0, offset)[0] - 1
+    const pubKeyBuffer = responseBuffer.subarray(++offset, (offset += pubKeyLen))
+    const chainCodeLen = responseBuffer.subarray(offset, ++offset)[0]
+    const chainCodeBuffer = responseBuffer.subarray(offset, offset + chainCodeLen)
 
     const address = '0x' + this.publicKeyToAddress(pubKeyBuffer).toString('hex')
 
@@ -59,30 +61,34 @@ export default class Aptos {
     }
   }
 
-  // send chunked if payload size exceeds maximum for a call
-  private async sendToDevice (instruction: number, p1: number, payload: Buffer): Promise<Buffer> {
-    const acceptStatusList = [StatusCodes.OK]
+  async signTransaction (path: string, txBuffer: Buffer): Promise<{ signature: Buffer }> {
+    const pathBuffer = this.pathToBuffer(path)
+    await this.sendToDevice(INS.SIGN_TX, P1_START, P2_MORE, pathBuffer)
+    const responseBuffer = await this.sendToDevice(INS.SIGN_TX, 1, P2_LAST, txBuffer)
 
-    let p2 = 0
+    const signatureLen = responseBuffer[0]
+    const signatureBuffer = responseBuffer.subarray(1, 1 + signatureLen)
+    return { signature: signatureBuffer }
+  }
+
+  // send chunked if payload size exceeds maximum for a call
+  private async sendToDevice (instruction: number, p1: number, p2: number, payload: Buffer): Promise<Buffer> {
+    const acceptStatusList = [StatusCodes.OK]
     let payloadOffset = 0
 
-    if (payload.length > MAX_PAYLOAD) {
-      while (payload.length - payloadOffset > MAX_PAYLOAD) {
-        const buf = payload.slice(payloadOffset, payloadOffset + MAX_PAYLOAD)
-        payloadOffset += MAX_PAYLOAD
-        // console.log( "send", (p2 | P2_MORE).toString(16), buf.length.toString(16), buf);
-        const reply = await this.transport.send(LEDGER_CLA, instruction, p1, p2 | P2_MORE, buf, acceptStatusList)
+    if (payload.length > MAX_APDU_LEN) {
+      while (payload.length - payloadOffset > MAX_APDU_LEN) {
+        const buf = payload.subarray(payloadOffset, (payloadOffset += MAX_APDU_LEN))
+        const reply = await this.transport.send(LEDGER_CLA, instruction, p1++, P2_MORE, buf, acceptStatusList)
         this.throwOnFailure(reply)
-        p2 |= P2_EXTEND
       }
     }
 
-    const buf = payload.slice(payloadOffset)
-    // console.log("send", p2.toString(16), buf.length.toString(16), buf);
+    const buf = payload.subarray(payloadOffset)
     const reply = await this.transport.send(LEDGER_CLA, instruction, p1, p2, buf, acceptStatusList)
     this.throwOnFailure(reply)
 
-    return reply.slice(0, reply.length - 2)
+    return reply.subarray(0, reply.length - 2)
   }
 
   private pathToBuffer (originalPath: string): Buffer {
